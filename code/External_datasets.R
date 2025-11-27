@@ -322,78 +322,63 @@ for (st in names(out_list)) {
 ###### GSE57110 (rat, counts, DESeq2)
 ####################################
 
-geo <- getGEO("GSE57110", GSEMatrix = TRUE, AnnotGPL = TRUE,
-              destdir = "data/Fasting")
+geo<-getGEO("GSE57110", GSEMatrix = TRUE, AnnotGPL = TRUE, destdir = "data/Fasting")
+GSE57110<-exprs(geo$GSE57110_series_matrix.txt.gz)
+GSE57110_meta<-pData(geo$GSE57110_series_matrix.txt.gz)
 
-GSE57110_meta <- pData(geo$GSE57110_series_matrix.txt.gz)
-
-files <- list.files("data/Fasting/GSE57110_RAW")
-GSE57110 <- read.csv(
-  file.path("data/Fasting/GSE57110_RAW", files[1]),
-  sep = "\t", row.names = 1
-)
-for (f in files[-1]) {
-  tmp <- read.csv(
-    file.path("data/Fasting/GSE57110_RAW", f),
-    sep = "\t", row.names = 1
-  )
-  GSE57110 <- cbind(GSE57110, tmp)
+files<-list.files("Data/Fasting/GSE57110_RAW")
+GSE57110<-read.csv(paste("Data/Fasting/GSE57110_RAW/", files[1], sep=""), sep="\t", row.names = 1)
+for(f in files[-1]){
+  GSE57110<-cbind(GSE57110, read.csv(paste("Data/Fasting/GSE57110_RAW/", f, sep=""), sep="\t", row.names = 1))
 }
-colnames(GSE57110) <- gsm_ids <- sub("^(GSM[0-9]+).*", "\\1", files)
+colnames(GSE57110)<-gsm_ids <- sub("^(GSM[0-9]+).*", "\\1", files)
+match(colnames(GSE57110), GSE57110_meta[,2])
+
 
 ensembl.rat <- useMart("ensembl", dataset = "rnorvegicus_gene_ensembl")
 
-ids <- getBM(attributes = c('ensembl_gene_id', 'external_gene_name'),
-             filters    = 'ensembl_gene_id',
-             values     = rownames(GSE57110),
-             mart       = ensembl.rat)
-colnames(ids) <- c("ensembl_gene_id", "symbol")
+ids<-getBM(attributes = c('ensembl_gene_id', 'mgi_symbol'),
+           filters = 'ensembl_gene_id',
+           values = rownames(GSE57110),
+           mart = ensembl.rat)
+GSE57110<-changenames(data=GSE57110, anno=ids)
 
-GSE57110 <- changenames(data = as.matrix(GSE57110), anno = ids)
+normid<-which(GSE57110_meta$`treatment:ch1`=="6 months ad libitum")
+fastid<-which(GSE57110_meta$`treatment:ch1`=="6 months calorie restriction")
+normid<-intersect(colnames(GSE57110), GSE57110_meta[normid,"geo_accession"])
+fastid<-intersect(colnames(GSE57110), GSE57110_meta[fastid,"geo_accession"])
 
-## 6 months
-normid <- which(GSE57110_meta$`treatment:ch1` == "6 months ad libitum")
-fastid <- which(GSE57110_meta$`treatment:ch1` == "6 months calorie restriction")
-
-normid <- intersect(colnames(GSE57110),
-                    GSE57110_meta[normid, "geo_accession"])
-fastid <- intersect(colnames(GSE57110),
-                    GSE57110_meta[fastid, "geo_accession"])
-
-dds_fasting_GSE57110_6 <- DESeqDataSetFromMatrix(
-  countData = GSE57110[, c(fastid, normid)],
-  colData   = data.frame(
-    treatment = c(rep("Fast", length(fastid)), rep("Norm", length(normid)))
-  ),
-  design    = ~ treatment
-)
+## Differentially expressed genes
+dds_fasting_GSE57110_6<- DESeqDataSetFromMatrix(countData = GSE57110[,c(fastid, normid)],
+                                                colData = data.frame(treatment=c(rep("Fast", length(fastid)), rep("Norm", length(normid)))),
+                                                design= ~ treatment)
 dds_fasting_GSE57110_6 <- DESeq(dds_fasting_GSE57110_6)
-DE_fasting_GSE57110_6 <- results(
-  dds_fasting_GSE57110_6,
-  contrast = c("treatment", "Fast", "Norm")
-)
+DE_fasting_GSE57110_6 <- results(dds_fasting_GSE57110_6, contrast = c("treatment","Fast", "Norm"))
 
-## 28 months
-normid <- which(GSE57110_meta$`treatment:ch1` == "28 months ad libitum")
-fastid <- which(GSE57110_meta$`treatment:ch1` == "28 months calorie restriction")
+normid<-which(GSE57110_meta$`treatment:ch1`=="12 months ad libitum")
+fastid<-which(GSE57110_meta$`treatment:ch1`=="12 months calorie restriction")
+normid<-intersect(colnames(GSE57110), GSE57110_meta[normid,"geo_accession"])
+fastid<-intersect(colnames(GSE57110), GSE57110_meta[fastid,"geo_accession"])
 
-normid <- intersect(colnames(GSE57110),
-                    GSE57110_meta[normid, "geo_accession"])
-fastid <- intersect(colnames(GSE57110),
-                    GSE57110_meta[fastid, "geo_accession"])
+## Differentially expressed genes
+dds_fasting_GSE57110_12<- DESeqDataSetFromMatrix(countData = GSE57110[,c(fastid, normid)],
+                                                colData = data.frame(treatment=c(rep("Fast", length(fastid)), rep("Norm", length(normid)))),
+                                                design= ~ treatment)
+dds_fasting_GSE57110_12 <- DESeq(dds_fasting_GSE57110_12)
+DE_fasting_GSE57110_12 <- results(dds_fasting_GSE57110_12, contrast = c("treatment","Fast", "Norm"))
 
-dds_fasting_GSE57110_28 <- DESeqDataSetFromMatrix(
-  countData = GSE57110[, c(fastid, normid)],
-  colData   = data.frame(
-    treatment = c(rep("Fast", length(fastid)), rep("Norm", length(normid)))
-  ),
-  design    = ~ treatment
-)
+normid<-which(GSE57110_meta$`treatment:ch1`=="28 months ad libitum")
+fastid<-which(GSE57110_meta$`treatment:ch1`=="28 months calorie restriction")
+normid<-intersect(colnames(GSE57110), GSE57110_meta[normid,"geo_accession"])
+fastid<-intersect(colnames(GSE57110), GSE57110_meta[fastid,"geo_accession"])
+
+## Differentially expressed genes
+dds_fasting_GSE57110_28<- DESeqDataSetFromMatrix(countData = GSE57110[,c(fastid, normid)],
+                                                 colData = data.frame(treatment=c(rep("Fast", length(fastid)), rep("Norm", length(normid)))),
+                                                 design= ~ treatment)
 dds_fasting_GSE57110_28 <- DESeq(dds_fasting_GSE57110_28)
-DE_fasting_GSE57110_28 <- results(
-  dds_fasting_GSE57110_28,
-  contrast = c("treatment", "Fast", "Norm")
-)
+DE_fasting_GSE57110_28 <- results(dds_fasting_GSE57110_28, contrast = c("treatment","Fast", "Norm"))
+
 
 
 ####################################
@@ -818,6 +803,39 @@ fit_contrast <- eBayes(contrasts.fit(fit, cont_matrix))
 DEl_fasting_GSE11291_O <- topTable(fit_contrast, number = nrow(fit_contrast),
                                    adjust = "BH")
 
+####################################
+###### GSE200820
+####################################
+
+geo<-getGEO("GSE200820", GSEMatrix = TRUE, AnnotGPL = TRUE, destdir = "data/Fasting")
+GSE200820<-exprs(geo$GSE200820_series_matrix.txt.gz)
+GSE200820_meta<-pData(geo$GSE200820_series_matrix.txt.gz)
+GSE200820<-read.csv("data/Fasting/GSE200820_CRvCD_normalised_counts_table.txt.gz", sep="\t")
+GSE200820<-changenames(data=GSE200820[,-1], anno=cbind(rownames(GSE200820), GSE200820[,1]))
+
+GSE200820<-log2(GSE200820+1)
+
+normid<-grep("CT", colnames(GSE200820))
+fastid<-grep("CR", colnames(GSE200820))
+normid<-colnames(GSE200820)[normid]
+fastid<-colnames(GSE200820)[fastid]
+
+data<-GSE200820[,c(normid, fastid)]
+treatment<-c(rep("Norm", length(normid)), rep("Fast", length(fastid)))
+treatment<-factor(treatment, levels=c("Norm", "Fast"))
+
+design <- model.matrix(~ 0+treatment)
+colnames(design) <- c("Norm", "Fast")
+cont_matrix <- makeContrasts(FastvsControl = Fast-Norm, levels=design)
+
+# Fit the expression matrix to a linear model
+fit <- lmFit(data, design)
+# Compute contrast
+fit_contrast <- contrasts.fit(fit, cont_matrix)
+# Bayes statistics of differential expression
+# *There are several options to tweak!*
+fit_contrast <- eBayes(fit_contrast)
+DEl_fasting_GSE200820 <- topTable(fit_contrast, number = nrow(fit_contrast), adjust = "BH")
 
 ###################################################################################################
 # HORMESIS: preconditioning, hypoxia, exercise
