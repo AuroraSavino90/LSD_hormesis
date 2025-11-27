@@ -1162,6 +1162,42 @@ DEl_exer_GSE39697_30d_gc <- topTable(fit_contrast, number = nrow(fit_contrast),
                                      adjust = "BH")
 
 
+##############################
+## GSE205907
+################################
+
+geo <- getGEO("GSE205907", GSEMatrix = TRUE, AnnotGPL = TRUE,
+              destdir = "data/Exercise/")
+GSE205907<-exprs(geo$GSE205907_series_matrix.txt.gz)
+GSE205907 <- read.xlsx("data/Exercise/GSE205907_fpkm.xlsx")
+GSE205907<-changenames(data=GSE205907[,-1], anno=cbind(rownames(GSE205907), GSE205907[,1]))
+
+GSE205907_meta<-pData(geo$GSE205907_series_matrix.txt.gz)
+
+ctrl<-which(GSE205907_meta$`tissue:ch1`=="cortex" & GSE205907_meta$`treatment:ch1`=="MPTP")
+trt<-which(GSE205907_meta$`tissue:ch1`=="cortex" & GSE205907_meta$`treatment:ch1`=="MPTP+exercise")
+
+normid <- which(GSE205907_meta$`tissue:ch1`=="cortex" & GSE205907_meta$`treatment:ch1`=="MPTP")
+stimid <- which(GSE205907_meta$`tissue:ch1`=="cortex" & GSE205907_meta$`treatment:ch1`=="MPTP+exercise")
+
+normid <- colnames(GSE205907)[normid]
+stimid <- colnames(GSE205907)[stimid]
+
+data  <- GSE205907[, c(normid, stimid)]
+group <- factor(
+  c(rep("Ctrl", length(normid)), rep("Stim", length(stimid))),
+  levels = c("Ctrl", "Stim")
+)
+
+design <- model.matrix(~ 0 + group)
+colnames(design) <- c("Ctrl", "Stim")
+cont_matrix <- makeContrasts(StimVsCtrl = Stim - Ctrl, levels = design)
+
+fit          <- lmFit(data, design)
+fit_contrast <- eBayes(contrasts.fit(fit, cont_matrix))
+DEl_exer_GSE205907 <- topTable(fit_contrast, number = nrow(fit_contrast),
+                                     adjust = "BH")
+
 
 
 ensembl.mouse <- useMart("ensembl", dataset = "mmusculus_gene_ensembl")
@@ -1756,5 +1792,8 @@ DE_stress_GSE198725_VTA <- results(
   dds_stress_GSE198725_VTA,
   contrast = c("condition", "Stress", "Ctrl")
 )
+
+
+
 
 save.image(file=paste(results_dir, "/External_datasets.RData", sep=""))
