@@ -1,7 +1,7 @@
 load("results/20251124/DE_24h.RData")
 load("results/20251124/DE_90min.RData")
 load("results/20251124/External_datasets.RData")
-
+source("code/Helpers.R")
 ######################
 ## remove non-cortex datasets
 ##########################
@@ -117,8 +117,8 @@ dataset_type <- case_when(
 )
 names(dataset_type) <- colnames(NES_mat)
 
-save(NES_mat,      file.path(results_dir, "NES_mat_C5.RData"))
-save(dataset_type, file.path(results_dir, "NES_dataset_type.RData"))
+save(NES_mat,      file=file.path(results_dir, "NES_mat_C5.RData"))
+save(dataset_type, file=file.path(results_dir, "NES_dataset_type.RData"))
 
 ##############################################
 ## sPLS-DA: hormesis vs chronic stress + LSD projection
