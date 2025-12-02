@@ -1,5 +1,5 @@
 #############################################
-## LSD PFC – Basic DE & Enrichment Pipeline
+## LSD PFC – QC, Differential expression and enrichment
 #############################################
 
 ## Packages ----
@@ -11,7 +11,7 @@ library(msigdbr)
 library(clusterProfiler)
 library(enrichplot)
 library(org.Mm.eg.db)
-library(enrichR)
+library(ggrepel)
 
 theme_set(theme_classic())
 
@@ -45,8 +45,7 @@ changenames <- function(data, anno){
     simplify = FALSE
   )
   
-  # 2) Harden the resolver
-  resolve_symbol <- function(id) {
+ resolve_symbol <- function(id) {
     id <- as.character(id)
     if (is.na(id) || !nzchar(id)) return(NA_character_)  # invalid name
     syms <- sym_by_id[[id]]
@@ -57,7 +56,6 @@ changenames <- function(data, anno){
     NA_character_
   }
   
-  # 3) Coerce row ids to character before vapply
   ids <- as.character(rownames(data))
   map_vec <- vapply(ids, resolve_symbol, FUN.VALUE = character(1), USE.NAMES = FALSE)
   
@@ -72,21 +70,25 @@ changenames <- function(data, anno){
   data
 }
 
-## Volcano & summary helpers ----
-
 create_volcano <- function(res,
                            contrast_name,
                            results_dir,
-                           lfc_thresh = 1,
-                           alpha = 0.05) {
+                           alpha = 0.05,
+                           n_label = 10) {
   df <- as.data.frame(res)
   df$gene <- rownames(df)
   df <- df[!is.na(df$padj), ]
   
   df$negLog10Padj <- -log10(df$padj)
+  
+  
   df$status <- "NS"
-  df$status[df$padj < alpha & df$log2FoldChange >  lfc_thresh] <- "Up"
-  df$status[df$padj < alpha & df$log2FoldChange < -lfc_thresh] <- "Down"
+  df$status[df$padj < alpha & df$log2FoldChange >  0] <- "Up"
+  df$status[df$padj < alpha & df$log2FoldChange <  0] <- "Down"
+  
+  ## Select the most significant genes to label
+  df_label <- df[order(df$padj), ]
+  df_label <- head(df_label, n_label)
   
   p <- ggplot(df, aes(x = log2FoldChange,
                       y = negLog10Padj,
@@ -101,69 +103,63 @@ create_volcano <- function(res,
       x = "log2 fold change",
       y = "-log10(adj p-value)"
     ) +
-    geom_vline(xintercept = c(-lfc_thresh, lfc_thresh),
-               linetype = "dashed") +
+    
     geom_hline(yintercept = -log10(alpha),
-               linetype = "dashed")
+               linetype = "dashed") +
+    
+    geom_text_repel(
+      data = df_label,
+      aes(label = gene),
+      size = 3,
+      max.overlaps = Inf,
+      box.padding = 0.4,
+      point.padding = 0.2,
+      show.legend = FALSE
+    )
   
   ggsave(
     file.path(results_dir, paste0("Volcano_", contrast_name, ".png")),
     p, width = 6, height = 5, dpi = 300
   )
-}
-
-summarize_de <- function(res,
-                         contrast_name,
-                         results_dir,
-                         alpha = 0.05,
-                         n = 50) {
-  df <- as.data.frame(res)
-  df$gene <- rownames(df)
-  
-  # significant
-  df_sig <- df[!is.na(df$padj) & df$padj < alpha, ]
-  df_sig <- df_sig[order(df_sig$padj,
-                         -abs(df_sig$log2FoldChange)), ]
-  
-  # save all significant
-  write.csv(
-    df_sig,
-    file = file.path(results_dir,
-                     paste0("DE_", contrast_name, "_all_sig.csv")),
-    row.names = FALSE
-  )
-  
-  # top up / down
-  up <- df_sig[df_sig$log2FoldChange > 0, ]
-  dn <- df_sig[df_sig$log2FoldChange < 0, ]
-  
-  write.csv(
-    head(up, n),
-    file = file.path(results_dir,
-                     paste0("DE_", contrast_name, "_top", n, "_up.csv")),
-    row.names = FALSE
-  )
-  write.csv(
-    head(dn, n),
-    file = file.path(results_dir,
-                     paste0("DE_", contrast_name, "_top", n, "_down.csv")),
-    row.names = FALSE
+  ggsave(
+    file.path(results_dir, paste0("Volcano_", contrast_name, ".pdf")),
+    p, width = 6, height = 5
   )
 }
 
-# Simple ggplot boxplot helper for twitch counts or gene expression
-save_boxplot <- function(df, x, y, fill = NULL, filename, title = NULL, ylab = NULL) {
-  p <- ggplot(df, aes(x = {{ x }}, y = {{ y }}, fill = {{ fill }})) +
-    geom_boxplot() +
-    theme_bw() +
-    labs(title = title, y = ylab, x = NULL)
+###gsea plot with color corresponding to NES sign
+custom_gsea_dotplot <- function(gsea_res, n = 20, title = "") {
   
-  ggsave(filename, p, width = 5, height = 7, dpi = 300)
+  df <- as.data.frame(gsea_res)
+  
+  # Take top for |NES|
+  df <- df[order(abs(df$NES), decreasing = TRUE), ] %>% 
+    head(n)
+  
+  df$Description <- factor(df$Description, levels = df$Description[order(df$NES)])
+  
+  ggplot(df, aes(x = NES, y = Description)) +
+    geom_point(aes(size = -log10(p.adjust), color = NES)) +
+    scale_color_gradient2(
+      low = "blue", mid = "white", high = "red",
+      midpoint = 0
+    ) +
+    theme(
+      axis.text.y = element_text(size = 10),
+      plot.title = element_text(size = 14, face = "bold")
+    ) +
+    labs(
+      title = title,
+      x = "NES (Normalized Enrichment Score)",
+      y = "",
+      color = "NES",
+      size = "-log10(adj p)"
+    )
 }
 
 
 #############################################
-## 1. Load & normalize counts
+## Load & normalize counts
 #############################################
 
 counts <- read.csv("data/merged_gene_counts.txt", sep = "\t")
@@ -186,7 +182,7 @@ RPMlog <- log2(RPM + 1)
 
 
 #############################################
-## 2. Metadata & PCA
+## PCA
 #############################################
 
 meta <- data.frame(
@@ -223,46 +219,29 @@ ggsave(file.path(results_dir, "PCA_time.png"),      p_pca_time,  width = 5, heig
 
 
 #############################################
-## 3. IEG QC at 90min 
+## IEG expression 
 #############################################
 
-# Indices for 90min LSD vs Saline 
-idx_90min <- c(1, 6, 7, 10, 4, 5) # first three LSD, last three Saline
-group_90min <- rep(c("LSD", "Saline"), each = 3)
+expr_df <- cbind.data.frame(t(RPMlog), meta)
+expr_df$time <- factor(expr_df$time, levels = c("90min", "24h"))
 
-# Indices for 24h LSD vs Saline 
-idx_24h      <- c(9, 12, 8, 11, 3, 2)
-group_24h    <- rep(c("LSD", "Saline"), each = 3)
+genes_to_plot <- c("Arc", "Bdnf","Egr1", "Fos")
 
-
-plot_ieg_box <- function(gene, filename_prefix, time) {
-  png(file.path(results_dir, paste0(filename_prefix, ".png")), res = 300,
-      width = 700, height = 1500)
+for (g in genes_to_plot) {
+  p <- ggplot(expr_df, aes(x = time, y = .data[[g]], fill = treatment)) +
+    geom_boxplot() +
+    labs(title = paste(g, "expression"), y = "log2 RPM + 1", x = "Time")
   
-  if(time=="90min"){
-    boxplot(
-      RPMlog[gene, idx_90min] ~ group_90min,
-      main = paste(gene, time),
-      ylab = "log2 RPM + 1")
-  } else {
-    boxplot(
-      RPMlog[gene, idx_24h] ~ group_24h,
-      main = paste(gene, time),
-      ylab = "log2 RPM + 1")
-  }
-  dev.off()
+  ggsave(file.path(results_dir, paste0("Expr_", g, ".png")),
+         p, width = 4, height = 5, dpi = 300)
+  ggsave(file.path(results_dir, paste0("Expr_", g, ".pdf")),      
+         p, width = 4, height = 5)
+  
 }
 
-plot_ieg_box("Fos",  "Fos90min", "90min")
-plot_ieg_box("Arc",  "Arc90min", "90min")
-plot_ieg_box("Bdnf", "Bdnf90min", "90min")
-plot_ieg_box("Fos",  "Fos24h", "24h")
-plot_ieg_box("Arc",  "Arc24h", "24h")
-plot_ieg_box("Bdnf", "Bdnf24h", "24h")
-
 
 #############################################
-## 4. DESeq2 – Separate 90min and 24h analyses
+## DEGs
 #############################################
 
 ## 90min
@@ -287,7 +266,6 @@ write.csv(dn_90min,
 save(DE_90min, file = file.path(results_dir, "DE_90min.RData"))
 
 create_volcano(DE_90min, "90min", results_dir)
-summarize_de(DE_90min, "90min", results_dir)
 
 ## 24h
 dds_24h <- DESeqDataSetFromMatrix(
@@ -311,11 +289,10 @@ write.csv(dn_24h,
 save(DE_24h, file = file.path(results_dir, "DE_24h.RData"))
 
 create_volcano(DE_24h, "24h", results_dir)
-summarize_de(DE_24h, "24h", results_dir)
 
 
 #############################################
-## 5. GSEA with msigdbr (BP)
+## GSEA with msigdbr (BP)
 #############################################
 
 m_df <- msigdbr(species = "Mus musculus",
@@ -347,47 +324,6 @@ gsea_24 <- GSEA(
   maxGSSize    = 10000
 )
 
-# Dotplots
-p_gsea_90 <- dotplot(gsea_90, showCategory = 20) + ggtitle("GSEA at 90min")
-p_gsea_24 <- dotplot(gsea_24, showCategory = 20) + ggtitle("GSEA at 24h")
-
-ggsave(file.path(results_dir, "GSEA_90min.png"), p_gsea_90, width = 7, height = 10, dpi = 300)
-ggsave(file.path(results_dir, "GSEA_24h.png"), p_gsea_24, width = 7, height = 10, dpi = 300)
-
-
-library(ggplot2)
-library(dplyr)
-
-custom_gsea_dotplot <- function(gsea_res, n = 20, title = "") {
-  
-  df <- as.data.frame(gsea_res)
-  
-  # Prendi i top n per |NES|
-  df <- df[order(abs(df$NES), decreasing = TRUE), ] %>% 
-    head(n)
-  
-  df$Description <- factor(df$Description, levels = df$Description[order(df$NES)])
-  
-  ggplot(df, aes(x = NES, y = Description)) +
-    geom_point(aes(size = -log10(p.adjust), color = NES)) +
-    scale_color_gradient2(
-      low = "blue", mid = "white", high = "red",
-      midpoint = 0
-    ) +
-    theme_bw() +
-    theme(
-      axis.text.y = element_text(size = 10),
-      plot.title = element_text(size = 14, face = "bold")
-    ) +
-    labs(
-      title = title,
-      x = "NES (Normalized Enrichment Score)",
-      y = "",
-      color = "NES",
-      size = "-log10(adj p)"
-    )
-}
-
 # Plots
 p_gsea_90_signed <- custom_gsea_dotplot(gsea_90, n = 20, 
                                         title = "GSEA 90min (signed NES)")
@@ -395,15 +331,21 @@ p_gsea_24_signed <- custom_gsea_dotplot(gsea_24, n = 20,
                                         title = "GSEA 24h (signed NES)")
 
 ggsave(file.path(results_dir, "GSEA_90min_signedNES.png"),
-       p_gsea_90_signed, width = 12, height = 10, dpi = 300)
+       p_gsea_90_signed, width = 9, height = 8, dpi = 300)
 
 ggsave(file.path(results_dir, "GSEA_24h_signedNES.png"),
-       p_gsea_24_signed, width = 12, height = 10, dpi = 300)
+       p_gsea_24_signed, width = 11, height = 8, dpi = 300)
+
+ggsave(file.path(results_dir, "GSEA_90min_signedNES.pdf"),
+       p_gsea_90_signed, width = 9, height = 8)
+
+ggsave(file.path(results_dir, "GSEA_24h_signedNES.pdf"),
+       p_gsea_24_signed, width = 11, height = 8)
 
 
 
 #############################################
-## 6. GO over-representation (up/down)
+## GO over-representation (up/down separately)
 #############################################
 
 ego90minup <- enrichGO(
@@ -469,7 +411,7 @@ ggsave(file.path(results_dir, "GO_ego24h_dn.png"),
 
 
 #############################################
-## 7. Common DEGs between 90min and 24h
+## Common DEGs between 90min and 24h
 #############################################
 
 DE_common <- intersect(
@@ -497,24 +439,5 @@ ggsave(file.path(results_dir, "GO_common.png"),
          ggtitle("GO – DEGs in both 90min & 24h"),
        width = 7, height = 12, dpi = 300)
 
-
-#############################################
-## 8. Expression boxplots (genes vs time/treatment)
-#############################################
-
-expr_df <- cbind.data.frame(t(RPMlog), meta)
-expr_df$time <- factor(expr_df$time, levels = c("90min", "24h"))
-
-genes_to_plot <- c("Arc", "Mbp", "Tcf4", "Tet3", "Per2")
-
-for (g in genes_to_plot) {
-  p <- ggplot(expr_df, aes(x = time, y = .data[[g]], fill = treatment)) +
-    geom_boxplot() +
-    theme_bw() +
-    labs(title = paste(g, "expression"), y = "log2 RPM + 1", x = "Time")
-  
-  ggsave(file.path(results_dir, paste0("Expr_", g, ".png")),
-         p, width = 5, height = 5, dpi = 300)
-}
 
 
