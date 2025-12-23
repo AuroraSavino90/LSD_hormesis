@@ -2,20 +2,8 @@ load("results/20251124/DE_24h.RData")
 load("results/20251124/DE_90min.RData")
 load("results/20251124/External_datasets.RData")
 source("code/Helpers.R")
-######################
-## remove non-cortex datasets
-##########################
 
-rm(DEl_exer_GSE39697_4d, DEl_exer_GSE39697_30d, DEl_exer_GSE39697_30d_gc, DEl_exer_GSE39697_4d_gc,
-   DEl_stress_GSE151807_hipp, DEl_stress_GSE151807_amy, DEl_stress_GSE109315_vHPC_C57BL,
-   DEl_stress_GSE109315_vHPC_DBA, DEl_stress_GSE109315_BNST_C57BL,
-   DEl_stress_GSE109315_BNST_DBA, DEl_stress_GSE84183_DG, DEl_stress_GSE84183_CG,
-   DEl_stress_GSE8262_hippx_CCH, DEl_stress_GSE8262_hippx_CIH,
-   DE_stress_GSE198725_BLA, DE_stress_GSE198725_VTA )
-
-## packages
-
-suppressPackageStartupMessages({
+library(openxlsx)
   library(dplyr)
   library(tidyr)
   library(fgsea)
@@ -26,9 +14,6 @@ suppressPackageStartupMessages({
   library(mixOmics)
   library(ggrepel)
   library(patchwork)
-})
-
-## folder
 
 results_dir <- "results/20251124"
 dir.create(file.path(results_dir, "figures"),
@@ -40,7 +25,7 @@ dir.create(file.path(results_dir, "figures"),
 ## GSEA for all DE/DEl objects
 ##############################################
 
-species <- "Mus musculus"  # cambia in "Homo sapiens" se necessario
+species <- "Mus musculus"  
 
 # Gene sets (C5 biol. process)
 msig <- msigdbr(species = species, category = "C5")
@@ -66,7 +51,6 @@ get_ranked <- function(df) {
 }
 
 all_names <- ls(pattern = "^(DE|DEl)_")
-if (length(all_names) == 0) stop("Nessun oggetto DE/DEl_ trovato in ambiente.")
 
 # ranked lists for each DE
 ranked_lists <- lapply(all_names, function(nm){
@@ -135,6 +119,7 @@ X_train    <- t(NES_mat[, keep_train, drop = FALSE])  # samples x pathways
 Y_train    <- factor(dataset_type_simpl[keep_train],
                      levels = c("hormesis", "stress"))
 
+set.seed(576906830)
 splsda_res <- splsda(X_train, Y_train,
                      ncomp = 2,
                      keepX = c(20, 20))
@@ -158,33 +143,41 @@ group3 <- dplyr::case_when(
 )
 group3 <- factor(group3, levels = c("Hormesis", "Chronic stress", "LSD"))
 
-pred_all <- predict(splsda_res, newdata = X_all)
+##############################################
+## Projection of all datasets 
+##############################################
 
-# extract scores
-if (is.list(pred_all) && "variates" %in% names(pred_all)) {
-  var_comp <- pred_all[["variates"]]
-  if (is.list(var_comp) && "X" %in% names(var_comp)) {
-    scores_arr <- var_comp[["X"]]
-  } else {
-    scores_arr <- var_comp
-  }
-} else if (is.list(pred_all) && "x" %in% names(pred_all)) {
-  scores_arr <- pred_all[["x"]]
-} else {
-  scores_arr <- pred_all
-}
+center_tr <- colMeans(X_train, na.rm = TRUE)
+sd_tr     <- apply(X_train, 2, sd, na.rm = TRUE)
+sd_tr[!is.finite(sd_tr) | sd_tr == 0] <- 1
 
-if (length(dim(scores_arr)) == 3L) {
-  scores_mat <- scores_arr[, 1:2, 1, drop = FALSE]
-} else {
-  scores_mat <- scores_arr[, 1:2, drop = FALSE]
+## Align features between X_all and training loadings
+loadX <- splsda_res$loadings$X[, 1:2, drop = FALSE]  # pathways x components (only 2 comps here)
+needed_feats <- rownames(loadX)
+missing_feats <- setdiff(needed_feats, colnames(X_all))
+if (length(missing_feats) > 0) {
+  stop("X_all is missing ", length(missing_feats), " features used by the model. Example: ",
+       paste(head(missing_feats, 5), collapse = ", "))
 }
+X_all2 <- X_all[, needed_feats, drop = FALSE]
+
+## Replace NA/Inf with 0
+X_all2[!is.finite(X_all2)] <- NA_real_
+X_all2[is.na(X_all2)] <- 0
+
+## Scale X_all using TRAINING params
+X_all_scaled <- sweep(sweep(X_all2, 2, center_tr[needed_feats], "-"), 2, sd_tr[needed_feats], "/")
+
+## Manual projection: scores = X_scaled %*% loadings
+scores_mat <- X_all_scaled %*% loadX
+scores_mat[!is.finite(scores_mat)] <- 0
+colnames(scores_mat) <- c("comp1", "comp2")
 
 scores_all <- as.data.frame(scores_mat)
-colnames(scores_all) <- c("comp1", "comp2")
 scores_all$dataset  <- keep_cols
 scores_all$type_raw <- type_all
 scores_all$group3   <- group3
+
 
 ##############################################
 ## LSD distance from centroids
@@ -199,45 +192,62 @@ centroids <- scores_all %>%
     .groups = "drop"
   )
 
-distances <- scores_all %>%
-  filter(group3 == "LSD") %>%
-  rowwise() %>%
-  mutate(
-    dist_hormesis = sqrt(
-      (comp1 - centroids$comp1[centroids$group3 == "Hormesis"])^2 +
-        (comp2 - centroids$comp2[centroids$group3 == "Hormesis"])^2
-    ),
-    dist_stress = sqrt(
-      (comp1 - centroids$comp1[centroids$group3 == "Chronic stress"])^2 +
-        (comp2 - centroids$comp2[centroids$group3 == "Chronic stress"])^2
-    )
-  ) %>%
-  ungroup()
+##############################################
+## Pairwise distances: each point = (LSD, hormesis/stress dataset)
+##############################################
 
-dist_summary <- distances %>%
-  summarise(
-    mean_dist_hormesis = mean(dist_hormesis),
-    mean_dist_stress   = mean(dist_stress)
-  ) %>%
-  tidyr::pivot_longer(
-    cols = everything(),
-    names_to = "target",
-    values_to = "mean_distance"
-  ) %>%
+# LSD scores
+lsd_scores <- scores_all %>%
+  filter(group3 == "LSD") %>%
+  dplyr::select(lsd_dataset = dataset,
+                lsd_comp1  = comp1,
+                lsd_comp2  = comp2)
+
+# Hormesis + Chronic stress scores
+hs_scores <- scores_all %>%
+  filter(group3 %in% c("Hormesis", "Chronic stress")) %>%
+  dplyr::select(hs_dataset = dataset,
+                hs_comp1   = comp1,
+                hs_comp2   = comp2,
+                target     = group3)
+
+pair_dist <- tidyr::expand_grid(
+  lsd_dataset = lsd_scores$lsd_dataset,
+  hs_dataset  = hs_scores$hs_dataset
+) %>%
+  left_join(lsd_scores, by = "lsd_dataset") %>%
+  left_join(hs_scores, by = "hs_dataset") %>%
   mutate(
-    target = recode(target,
-                    mean_dist_hormesis = "Hormesis",
-                    mean_dist_stress   = "Chronic stress")
+    distance = sqrt(
+      (lsd_comp1 - hs_comp1)^2 +
+        (lsd_comp2 - hs_comp2)^2
+    ),
+    target = factor(target,
+                    levels = c("Hormesis", "Chronic stress"))
+  )
+
+wilcox_dist <- wilcox.test(distance ~ target, data = pair_dist, exact = FALSE)
+wilcox_p    <- wilcox_dist$p.value
+
+y_max <- max(pair_dist$distance, na.rm = TRUE)
+
+dist_summary <- pair_dist %>%
+  group_by(target) %>%
+  summarise(
+    mean_distance = mean(distance),
+    sd_distance   = sd(distance),
+    n_pairs       = n(),
+    .groups = "drop"
   )
 
 write.csv(
-  distances,
-  file.path(results_dir, "sPLSDA_LSD_distances_per_sample.csv"),
+  pair_dist,
+  file.path(results_dir, "sPLSDA_LSD_pairwise_distances.csv"),
   row.names = FALSE
 )
 write.csv(
   dist_summary,
-  file.path(results_dir, "sPLSDA_LSD_distances_summary.csv"),
+  file.path(results_dir, "sPLSDA_LSD_pairwise_distances_summary.csv"),
   row.names = FALSE
 )
 
@@ -301,23 +311,57 @@ p_spls <- ggplot(scores_all, aes(x = comp1, y = comp2)) +
     plot.subtitle = element_text(size = 9)
   )
 
-p_dist <- ggplot(dist_summary,
-                 aes(x = target, y = mean_distance, fill = target)) +
-  geom_col(width = 0.6) +
-  geom_text(aes(label = sprintf("%.2f", mean_distance)),
-            vjust = -0.4, size = 3) +
+
+p_dist <- ggplot(pair_dist,
+                 aes(x = target, y = distance, fill = target)) +
+  geom_boxplot(alpha = 0.6, width = 0.6, outlier.shape = NA) +
+  geom_jitter(width = 0.12, alpha = 0.7, size = 2) +
+  stat_summary(fun = median, geom = "point",
+               size = 3, color = "black") +
+  stat_summary(
+    fun = median,
+    geom = "text",
+    aes(label = sprintf("%.2f", after_stat(y))),
+    vjust = -0.8,
+    size = 3
+  ) +
+ 
+  annotate(
+    "segment",
+    x = 1, xend = 2,
+    y = y_max * 1.05, yend = y_max * 1.05
+  ) +
+  annotate(
+    "segment",
+    x = 1, xend = 1,
+    y = y_max * 1.05, yend = y_max * 1.02
+  ) +
+  annotate(
+    "segment",
+    x = 2, xend = 2,
+    y = y_max * 1.05, yend = y_max * 1.02
+  ) +
+  annotate(
+    "text",
+    x = 1.5, y = y_max * 1.08,
+    label = paste0("Wilcoxon p = ", signif(wilcox_p, 2)),
+    size = 3
+  ) +
   scale_fill_manual(values = cols[c("Hormesis", "Chronic stress")],
                     guide = "none") +
   labs(
     x = NULL,
-    y = "Mean distance (sPLS-DA space)",
+    y = "Distance (sPLS-DA space)",
     title = "B  |  Proximity of LSD to hormesis vs chronic stress"
   ) +
+  coord_cartesian(ylim = c(0, y_max * 1.2)) +
   theme_classic(base_size = 11) +
   theme(
     plot.title = element_text(face = "bold"),
     axis.text.x = element_text(angle = 0, hjust = 0.5)
   )
+
+
 
 p_combined <- p_spls + p_dist + plot_layout(widths = c(2.2, 1))
 
@@ -339,3 +383,175 @@ ggsave(
   width    = 9,
   height   = 4.5
 )
+
+
+
+cent_stress <- centroids %>% 
+  filter(group3 == "Chronic stress")
+
+dist_axis <- scores_all %>%
+  filter(group3 == "LSD") %>%
+  mutate(
+    dist_comp1 = abs(comp1 - cent_stress$comp1),
+    dist_comp2 = abs(comp2 - cent_stress$comp2)
+  )
+
+dist_axis
+
+##LSD distance to stress is higher for comp1
+
+##############################################
+## Pathways most relevant for comp1 and comp2
+##############################################
+
+loadings <- splsda_res$loadings$X  # matrix: pathways x components
+
+load_df <- as.data.frame(loadings)
+load_df$pathway <- rownames(load_df)
+
+TOP_N <- 20
+
+# comp1
+top_comp1 <- load_df %>%
+  filter(comp1 != 0) %>%                 
+  arrange(desc(abs(comp1))) %>%          
+  mutate(component = "comp1")
+
+# comp2
+top_comp2 <- load_df %>%
+  filter(comp2 != 0) %>%                 
+  arrange(desc(abs(comp2))) %>%
+  mutate(component = "comp2")
+
+top_pathways <- bind_rows(top_comp1, top_comp2)
+
+
+shorten_pathway <- function(x, max_words = 4) {
+  x <- gsub("^GO(BP|CC|MF)?_", "", x)
+  words <- unlist(strsplit(x, "_"))
+  if (length(words) > max_words) words <- c(words[1:max_words], "...")
+  paste(words, collapse = " ")
+}
+
+top_pathways$pathway_short <- sapply(top_pathways$pathway, shorten_pathway)
+
+top_pathways <- top_pathways %>%
+  mutate(value = ifelse(component == "comp1", comp1, comp2))
+
+write.xlsx(top_pathways, file="top_pathways_sPLSD.xlsx")
+
+
+df_comp1 <- top_pathways %>% 
+  filter(component == "comp1") %>%
+  mutate(pathway = factor(pathway, levels = pathway[order(value)])) 
+
+p_comp1 <- ggplot(df_comp1,
+                  aes(x = value,              
+                      y = pathway,
+                      color = value > 0)) +    
+  geom_point(size = 3) +
+  scale_color_manual(
+    values = c("TRUE" = "#1b9e77", "FALSE" = "#d95f02"),
+    labels = c("FALSE" = "Negative loading", "TRUE" = "Positive loading")
+  ) +
+  labs(
+    x = "Loading",
+    y = "Pathway",
+    color = "Direction",
+    title = "Top pathways contributing to sPLS-DA — Component 1"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(
+    axis.text.y = element_text(size = 9)
+  )
+
+p_comp1
+
+ggsave(
+  filename = file.path(results_dir, "figures", "sPLSDA_loadings_comp1.png"),
+  plot     = p_comp1,
+  width    = 10,
+  height   = 6,
+  dpi      = 300
+)
+
+ggsave(
+  filename = file.path(results_dir, "figures", "sPLSDA_loadings_comp1.pdf"),
+  plot     = p_comp1,
+  width    = 10,
+  height   = 6
+)
+
+
+##############################################
+## Pathway-level summary: NES + mean log2FC
+##############################################
+
+pathway_selected <- "GOBP_NEUROTROPHIN_SIGNALING_PATHWAY"
+#"GOBP_POSITIVE_REGULATION_OF_HORMONE_SECRETION"
+
+df_nes <- fgsea_res_list %>%
+  dplyr::filter(pathway == pathway_selected) %>%
+  dplyr::mutate(
+    dataset_type       = dataset_type[dataset],
+    dataset_type_simpl = dataset_type_simpl[dataset]
+  )
+
+
+library(ggpubr)
+
+df_nes$dataset_type_simpl <- factor(
+  df_nes$dataset_type_simpl,
+  levels = c("LSD", "hormesis", "stress")
+)
+
+p_nes_box <- ggplot(df_nes,
+                    aes(x = dataset_type_simpl,
+                        y = NES,
+                        fill = dataset_type_simpl)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.6) +
+  geom_jitter(width = 0.15, alpha = 0.7, size = 2) +
+  stat_compare_means(
+    method = "wilcox.test",
+    comparisons = list(c("hormesis", "stress")),
+    label = "p.format",  
+    label.y = max(df_nes$NES, na.rm = TRUE) * 1.05
+  ) +
+  theme_classic(base_size = 11) +
+  labs(
+    x = NULL,
+    y = "NES (GSEA)",
+    title = paste0("NES of ", pathway_selected),
+    subtitle = "Per dataset type"
+  ) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold"),
+    axis.text.x = element_text(angle = 20, hjust = 1)
+  )
+
+p_nes_box
+
+
+ggsave(
+  filename = file.path(
+    results_dir, "figures",
+    paste0("Pathway_", pathway_selected, "_NES_boxplot.png")
+  ),
+  plot = p_nes_box,
+  width = 4,
+  height = 4,
+  dpi = 300
+)
+
+
+ggsave(
+  filename = file.path(
+    results_dir, "figures",
+    paste0("Pathway_", pathway_selected, "_NES_boxplot.pdf")
+  ),
+  plot = p_nes_box,
+  width = 4,
+  height = 4
+)
+
