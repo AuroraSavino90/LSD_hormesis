@@ -6,19 +6,8 @@ load("results/20251124/DE_90min.RData")
 load("results/20251124/External_datasets.RData")
 
 ## General params & paths
-date        <- "20251124"
+date <- "20251124"
 results_dir <- file.path("results", date)
-
-######################
-## remove non-cortex datasets
-##########################
-
-rm(DEl_exer_GSE39697_4d, DEl_exer_GSE39697_30d, DEl_exer_GSE39697_30d_gc, DEl_exer_GSE39697_4d_gc,
-   DEl_stress_GSE151807_hipp, DEl_stress_GSE151807_amy, DEl_stress_GSE109315_vHPC_C57BL,
-   DEl_stress_GSE109315_vHPC_DBA, DEl_stress_GSE109315_BNST_C57BL,
-   DEl_stress_GSE109315_BNST_DBA, DEl_stress_GSE84183_DG, DEl_stress_GSE84183_CG,
-   DEl_stress_GSE8262_hippx_CCH, DEl_stress_GSE8262_hippx_CIH,
-   DE_stress_GSE198725_BLA, DE_stress_GSE198725_VTA )
 
 
 ###############################
@@ -27,22 +16,16 @@ rm(DEl_exer_GSE39697_4d, DEl_exer_GSE39697_30d, DEl_exer_GSE39697_30d_gc, DEl_ex
 
 all_obj <- ls(pattern = "^(DE|DEl)_")
 
-# Riferimenti LSD (devono esistere)
 refs <- c("DE_90min", "DE_24h")
 stopifnot(all(refs %in% all_obj))
 
-# Escludi i riferimenti dal resto
 non_ref <- setdiff(all_obj, refs)
 
-# Gruppi di dataset in base al nome dell'oggetto
 fasting_targets <- non_ref[grepl("fasting", non_ref, ignore.case = TRUE)]
 exercise_targets <- non_ref[grepl("exer", non_ref, ignore.case = TRUE)]
-# Preconditioning: ischemic precond + mild hypoxia "hormetic"
 precond_targets <- non_ref[grepl("prec", non_ref, ignore.case = TRUE) |
                              grepl("hyp",  non_ref, ignore.case = TRUE)]
 stress_targets <- non_ref[grepl("stress", non_ref, ignore.case = TRUE)]
-
-# "hormesis" 
 hormesis_targets <- unique(c(fasting_targets, exercise_targets, precond_targets))
 
 
@@ -61,34 +44,13 @@ run_fisher_block <- function(ref_names,
                              env = .GlobalEnv) {
   message("=== Running block: ", block_label, " ===")
   
-  ## 1) Trova tutti gli oggetti DE/DEl nell'ambiente specificato
   all_obj <- ls(envir = env, pattern = "^(DE|DEl)_")
-  message("Found DE objects in env: ", paste(all_obj, collapse = ", "))
   
-  ## 2) Reference effettivamente presenti
   refs_found <- intersect(ref_names, all_obj)
-  if (length(refs_found) == 0) {
-    stop("Nessun oggetto di riferimento trovato tra: ",
-         paste(ref_names, collapse = ", "),
-         "\nOggetti DE disponibili: ",
-         paste(all_obj, collapse = ", "))
-  }
-  if (length(refs_found) < length(ref_names)) {
-    missing <- setdiff(ref_names, refs_found)
-    warning("I seguenti reference non sono stati trovati e verranno ignorati: ",
-            paste(missing, collapse = ", "))
-  }
-  message("Using references: ", paste(refs_found, collapse = ", "))
+   
   
-  ## 3) Target: tutti gli altri oggetti che matchano il pattern
   non_ref <- setdiff(all_obj, refs_found)
   targets <- non_ref[grepl(target_pattern, non_ref, ignore.case = TRUE)]
-  if (length(targets) == 0) {
-    warning("Nessun target trovato per pattern '", target_pattern,
-            "' (block: ", block_label, ").")
-    return(invisible(NULL))
-  }
-  message("Targets (", block_label, "): ", paste(targets, collapse = ", "))
   
   .col_by <- function(df, pat) {
     i <- grep(pat, tolower(colnames(df)))
@@ -130,19 +92,11 @@ run_fisher_block <- function(ref_names,
   fisher_rows <- list()
   
   for (ref_name in refs_found) {
-    if (!exists(ref_name, envir = env)) {
-      warning("Reference '", ref_name, "' non trovato in env; salto.")
-      next
-    }
     
     ref_df  <- get(ref_name, envir = env)
     ref_sig <- get_sig(ref_df)
     
     for (tgt_name in targets) {
-      if (!exists(tgt_name, envir = env)) {
-        warning("Target '", tgt_name, "' non trovato in env; salto.")
-        next
-      }
       
       tgt_df  <- get(tgt_name, envir = env)
       tgt_sig <- get_sig(tgt_df)
@@ -174,11 +128,6 @@ run_fisher_block <- function(ref_names,
     }
   }
   
-  if (length(fisher_rows) == 0) {
-    warning("Nessun risultato Fisher per il block '", block_label, "'.")
-    return(invisible(NULL))
-  }
-  
   fisher_summary <- dplyr::bind_rows(fisher_rows)
   fisher_summary$padj_BH <- p.adjust(fisher_summary$p_value, method = "BH")
  
@@ -187,7 +136,6 @@ run_fisher_block <- function(ref_names,
     paste0(results_prefix, "_", block_label, "_Fisher_DEonly.csv")
   )
   write.csv(fisher_summary, out_file, row.names = FALSE)
-  message("Salvato: ", out_file)
   
   fisher_plot_df_DE <- fisher_summary %>%
     dplyr::mutate(
@@ -395,7 +343,7 @@ comp_ds <- fisher_all %>%
   )
 
 summary_block <- comp_ds %>%
-  filter(odds_ratio > 1) %>%  # solo arricchimenti "positivi"
+  filter(odds_ratio > 1) %>%  
   group_by(block, reference) %>%
   summarise(
     n_datasets  = n(),
@@ -453,6 +401,30 @@ p_log2OR_labeled <- p_log2OR +
     fontface = "bold"
   )
 
+
+fig_png <- file.path(
+  results_dir, "figures",
+  "LSD_hormesis_vs_stress_log2OR_comparison.png"
+)
+fig_pdf <- file.path(
+  results_dir, "figures",
+  "LSD_hormesis_vs_stress_log2OR_comparison.pdf"
+)
+
+ggsave(
+  filename = fig_png,
+  plot     = p_log2OR_labeled,
+  width    = 6.2,    
+  height   = 4.5,
+  dpi      = 600
+)
+
+ggsave(
+  filename = fig_pdf,
+  plot     = p_log2OR_labeled,
+  width    = 6.2,
+  height   = 4.5
+)
 
 
 ########################################
@@ -514,6 +486,14 @@ res_comp <- compare_hormesis_vs_stress(
   B = 5000
 )
 
+res_comp_90min <- compare_hormesis_vs_stress(
+  fisher_all,
+  block_hormesis = "hormesis",
+  block_stress   = "chronic_stress",
+  reference      = "DE_90min",
+  B = 5000
+)
+
 ########################################
 ## Bootstrap density plot ##
 ########################################
@@ -552,6 +532,49 @@ boot_png <- file.path(
 boot_pdf <- file.path(
   results_dir, "figures",
   "LSD_vs_hormesis_vs_chronic_stress_metaFisher_bootstrap.pdf"
+)
+
+ggsave(boot_png, p_boot, width = 5.0, height = 4.0, dpi = 600)
+ggsave(boot_pdf, p_boot, width = 5.0, height = 4.0)
+
+
+
+
+
+df_boot <- tibble(
+  block  = "hormesis",
+  p_meta = res_comp_90min$boot_hormesis
+)
+
+p_meta_stress <- res_comp$p_meta_stress
+perm_p        <- res_comp$perm_p
+
+p_boot <- ggplot(df_boot, aes(x = -log10(p_meta))) +
+  geom_density(alpha = 0.4) +
+  geom_vline(
+    xintercept = -log10(p_meta_stress),
+    linetype   = "dashed",
+    linewidth  = 0.8
+  ) +
+  theme_classic(base_size = 14) +
+  labs(
+    x = expression(-log[10](p[meta])),
+    y = "Density",
+    title    = "Meta-analysis of LSD DEG overlap: hormesis vs chronic stress",
+    subtitle = paste0(
+      "Bootstrap distribution of hormesis meta-p (n = ", res_comp$n_stress,
+      " datasets) vs observed chronic-stress meta-p (vertical line);\n",
+      "permutation p = ", signif(perm_p, 3)
+    )
+  )
+
+boot_png <- file.path(
+  results_dir, "figures",
+  "LSD_vs_hormesis_vs_chronic_stress_metaFisher_bootstrap_90min.png"
+)
+boot_pdf <- file.path(
+  results_dir, "figures",
+  "LSD_vs_hormesis_vs_chronic_stress_metaFisher_bootstrap_90min.pdf"
 )
 
 ggsave(boot_png, p_boot, width = 5.0, height = 4.0, dpi = 600)
@@ -609,6 +632,64 @@ curve_png <- file.path(
 curve_pdf <- file.path(
   results_dir, "figures",
   "LSD_vs_hormesis_vs_chronic_stress_running_pcurve.pdf"
+)
+
+ggsave(curve_png, p_curve, width = 5.0, height = 4.2, dpi = 600)
+ggsave(curve_pdf, p_curve, width = 5.0, height = 4.2)
+
+## permutation p-value
+res_comp$perm_p
+
+
+
+
+significance_curve <- function(df, n_points = 200) {
+  thr <- seq(0, 0.2, length.out = n_points)  # extend to 1 if needed
+  
+  curves <- lapply(thr, function(t) {
+    tibble(
+      threshold = t,
+      block     = df$block[1],
+      reference = df$reference[1],
+      prop      = mean(df$p_value < t, na.rm = TRUE)
+    )
+  })
+  
+  bind_rows(curves)
+}
+
+sig_hormesis <- fisher_all %>%
+  filter(block == "hormesis", reference == "DE_90min") %>%
+  significance_curve()
+
+sig_stress <- fisher_all %>%
+  filter(block == "chronic_stress", reference == "DE_90min") %>%
+  significance_curve()
+
+sig_curve_all <- bind_rows(sig_hormesis, sig_stress)
+
+p_curve <- ggplot(sig_curve_all,
+                  aes(x = threshold, y = prop, color = block)) +
+  geom_line(linewidth = 1.1) +
+  theme_classic(base_size = 14) +
+  labs(
+    x = "P-value threshold",
+    y = "Fraction of datasets with p < threshold",
+    title    = "Cumulative fraction of significant overlaps",
+    subtitle = "LSD DEG enrichment in hormetic vs chronic stress signatures"
+  ) +
+  scale_color_manual(
+    name   = "Block",
+    values = c("hormesis" = "#1b9e77", "chronic_stress" = "#d95f02")
+  )
+
+curve_png <- file.path(
+  results_dir, "figures",
+  "LSD_vs_hormesis_vs_chronic_stress_running_pcurve_90min.png"
+)
+curve_pdf <- file.path(
+  results_dir, "figures",
+  "LSD_vs_hormesis_vs_chronic_stress_running_pcurve_90min.pdf"
 )
 
 ggsave(curve_png, p_curve, width = 5.0, height = 4.2, dpi = 600)
