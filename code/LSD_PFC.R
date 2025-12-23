@@ -12,6 +12,7 @@ library(clusterProfiler)
 library(enrichplot)
 library(org.Mm.eg.db)
 library(ggrepel)
+library(openxlsx)
 
 theme_set(theme_classic())
 
@@ -212,10 +213,16 @@ p_pca_time <- ggplot(pca_df, aes(x = PC1, y = PC2, colour = time)) +
   geom_point(size = 3) +
   labs(title = "PCA – time")
 
+p_pca_both <- ggplot(pca_df, aes(x = PC1, y = PC2, colour = treatment, shape=time)) +
+  geom_point(size = 3) +
+  labs(title = "PCA – time")
+
 ggsave(file.path(results_dir, "PCA_treatment.pdf"), p_pca_treat, width = 5, height = 5)
 ggsave(file.path(results_dir, "PCA_time.pdf"),      p_pca_time, width = 5, height = 5)
 ggsave(file.path(results_dir, "PCA_treatment.png"), p_pca_treat, width = 5, height = 5, dpi = 300)
 ggsave(file.path(results_dir, "PCA_time.png"),      p_pca_time,  width = 5, height = 5, dpi = 300)
+ggsave(file.path(results_dir, "PCA_both.png"), p_pca_both, width = 5, height = 5, dpi = 300)
+ggsave(file.path(results_dir, "PCA_both.pdf"),      p_pca_both,  width = 5, height = 5)
 
 
 #############################################
@@ -246,9 +253,9 @@ for (g in genes_to_plot) {
 
 ## 90min
 dds_90min <- DESeqDataSetFromMatrix(
-  countData = counts_name[,idx_90min],
-  colData   = data.frame(treatment = group_90min,
-                         row.names = colnames(counts_name)[idx_90min]),
+  countData = counts_name[,meta$time=="90min"],
+  colData   = data.frame(treatment = meta$treatment[meta$time=="90min"],
+                         row.names = colnames(counts_name)[meta$time=="90min"]),
   design    = ~ treatment
 )
 dds_90min <- DESeq(dds_90min)
@@ -269,9 +276,9 @@ create_volcano(DE_90min, "90min", results_dir)
 
 ## 24h
 dds_24h <- DESeqDataSetFromMatrix(
-  countData = counts_name[, idx_24h],
-  colData   = data.frame(treatment = group_24h,
-                         row.names = colnames(counts_name)[idx_24h]),
+  countData = counts_name[, meta$time=="24h"],
+  colData   = data.frame(treatment = meta$treatment[meta$time=="24h"],
+                         row.names = colnames(counts_name)[meta$time=="24h"]),
   design    = ~ treatment
 )
 dds_24h <- DESeq(dds_24h)
@@ -287,6 +294,31 @@ write.csv(dn_24h,
           file = file.path(results_dir, "24h_dn.csv"),
           quote = FALSE, row.names = FALSE)
 save(DE_24h, file = file.path(results_dir, "DE_24h.RData"))
+
+
+
+df_DE_90min <- as.data.frame(DE_90min)
+df_DE_90min$gene <- rownames(df_DE_90min)
+df_DE_90min <- df_DE_90min[, c("gene", setdiff(colnames(df_DE_90min), "gene"))]
+
+df_DE_24h <- as.data.frame(DE_24h)
+df_DE_24h$gene <- rownames(df_DE_24h)
+df_DE_24h <- df_DE_24h[, c("gene", setdiff(colnames(df_DE_24h), "gene"))]
+
+wb <- createWorkbook()
+
+addWorksheet(wb, "DESeq2_90min")
+writeData(wb, sheet = "DESeq2_90min", x = df_DE_90min)
+
+addWorksheet(wb, "DESeq2_24h")
+writeData(wb, sheet = "DESeq2_24h", x = df_DE_24h)
+
+saveWorkbook(
+  wb,
+  file = file.path(results_dir, "DESeq2_results_90min_24h.xlsx"),
+  overwrite = TRUE
+)
+
 
 create_volcano(DE_24h, "24h", results_dir)
 
@@ -397,17 +429,11 @@ ggsave(file.path(results_dir, "GO_ego90min_up.png"),
        dotplot(ego90minup, showCategory = 20) + ggtitle("GO – 90min up"),
        width = 7, height = 7, dpi = 300)
 
-ggsave(file.path(results_dir, "GO_ego90min_dn.png"),
-       dotplot(ego90mindn, showCategory = 20) + ggtitle("GO – 90min down"),
-       width = 7, height = 7, dpi = 300)
 
 ggsave(file.path(results_dir, "GO_ego24h_up.png"),
        dotplot(ego24hup, showCategory = 10) + ggtitle("GO – 24h up"),
        width = 7, height = 7, dpi = 300)
 
-ggsave(file.path(results_dir, "GO_ego24h_dn.png"),
-       dotplot(ego24hdn, showCategory = 20) + ggtitle("GO – 24h down"),
-       width = 7, height = 7, dpi = 300)
 
 
 #############################################
@@ -415,8 +441,8 @@ ggsave(file.path(results_dir, "GO_ego24h_dn.png"),
 #############################################
 
 DE_common <- intersect(
-  rownames(DE_90min)[DE_90min$padj < 0.05],
-  rownames(DE_24h)[DE_24h$padj < 0.05]
+  rownames(DE_90min)[DE_90min$log2FoldChange>0 & DE_90min$padj < 0.05],
+  rownames(DE_24h)[DE_24h$log2FoldChange>0 & DE_24h$padj < 0.05]
 )
 
 write.csv(DE_common,
@@ -437,7 +463,43 @@ egocommon <- enrichGO(
 ggsave(file.path(results_dir, "GO_common.png"),
        dotplot(egocommon, showCategory = 20) +
          ggtitle("GO – DEGs in both 90min & 24h"),
-       width = 7, height = 12, dpi = 300)
+       width = 7, height = 7, dpi = 300)
 
+ggsave(file.path(results_dir, "GO_common.pdf"),
+       dotplot(egocommon, showCategory = 20) +
+         ggtitle("GO – DEGs in both 90min & 24h"),
+       width = 7, height = 7)
+
+
+#############save xlsx
+
+df_ego90minup  <- as.data.frame(ego90minup)
+df_ego90mindn  <- as.data.frame(ego90mindn)
+df_ego24hup    <- as.data.frame(ego24hup)
+df_ego24hdn    <- as.data.frame(ego24hdn)
+df_egocommon   <- as.data.frame(egocommon)
+
+wb <- createWorkbook()
+
+addWorksheet(wb, "90min_up")
+writeData(wb, sheet = "90min_up",   x = df_ego90minup)
+
+addWorksheet(wb, "90min_down")
+writeData(wb, sheet = "90min_down", x = df_ego90mindn)
+
+addWorksheet(wb, "24h_up")
+writeData(wb, sheet = "24h_up",     x = df_ego24hup)
+
+addWorksheet(wb, "24h_down")
+writeData(wb, sheet = "24h_down",   x = df_ego24hdn)
+
+addWorksheet(wb, "common_90min_24h")
+writeData(wb, sheet = "common_90min_24h", x = df_egocommon)
+
+saveWorkbook(
+  wb,
+  file = file.path(results_dir, "GO_enrichment_results.xlsx"),
+  overwrite = TRUE
+)
 
 
