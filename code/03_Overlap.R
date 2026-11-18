@@ -546,8 +546,8 @@ df_boot <- tibble(
   p_meta = res_comp_90min$boot_hormesis
 )
 
-p_meta_stress <- res_comp$p_meta_stress
-perm_p        <- res_comp$perm_p
+p_meta_stress <- res_comp_90min$p_meta_stress
+perm_p        <- res_comp_90min$perm_p
 
 p_boot <- ggplot(df_boot, aes(x = -log10(p_meta))) +
   geom_density(alpha = 0.4) +
