@@ -431,9 +431,18 @@ ggsave(file.path(results_dir, "GO_ego90min_up.png"),
 
 
 ggsave(file.path(results_dir, "GO_ego24h_up.png"),
-       dotplot(ego24hup, showCategory = 10) + ggtitle("GO – 24h up"),
+       dotplot(ego24hup, showCategory = 20) + ggtitle("GO – 24h up"),
        width = 7, height = 7, dpi = 300)
 
+
+ggsave(file.path(results_dir, "GO_ego90min_up.pdf"),
+       dotplot(ego90minup, showCategory = 20) + ggtitle("GO – 90min up"),
+       width = 7, height = 12)
+
+
+ggsave(file.path(results_dir, "GO_ego24h_up.pdf"),
+       dotplot(ego24hup, showCategory = 20) + ggtitle("GO – 24h up"),
+       width = 7, height = 12)
 
 
 #############################################
@@ -468,7 +477,7 @@ ggsave(file.path(results_dir, "GO_common.png"),
 ggsave(file.path(results_dir, "GO_common.pdf"),
        dotplot(egocommon, showCategory = 20) +
          ggtitle("GO – DEGs in both 90min & 24h"),
-       width = 7, height = 7)
+       width = 7, height = 12)
 
 
 #############save xlsx
