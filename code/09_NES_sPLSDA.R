@@ -61,6 +61,7 @@ names(ranked_lists) <- all_names
 # GSEA/fgsea
 fgsea_res_list <- lapply(names(ranked_lists), function(nm){
   rnk <- ranked_lists[[nm]]
+  set.seed(SEED)  # reproducible permutations, independent of dataset order
   fgseaRes <- fgsea(pathways = gene_sets,
                     stats     = rnk,
                     nperm     = 5000,
@@ -119,10 +120,11 @@ X_train    <- t(NES_mat[, keep_train, drop = FALSE])  # samples x pathways
 Y_train    <- factor(dataset_type_simpl[keep_train],
                      levels = c("hormesis", "stress"))
 
-set.seed(576906830)
-splsda_res <- splsda(X_train, Y_train,
-                     ncomp = 2,
-                     keepX = c(20, 20))
+# shared parameters and fit/projection function: see Helpers.R
+splsda_fit <- fit_project_splsda(X_train, Y_train,
+                                 ncomp = SPLSDA_NCOMP,
+                                 keepX = SPLSDA_KEEPX)
+splsda_res <- splsda_fit$model
 
 # used pathways
 feat_used <- rownames(splsda_res$loadings$X)
@@ -147,31 +149,8 @@ group3 <- factor(group3, levels = c("Hormesis", "Chronic stress", "LSD"))
 ## Projection of all datasets 
 ##############################################
 
-center_tr <- colMeans(X_train, na.rm = TRUE)
-sd_tr     <- apply(X_train, 2, sd, na.rm = TRUE)
-sd_tr[!is.finite(sd_tr) | sd_tr == 0] <- 1
-
-## Align features between X_all and training loadings
-loadX <- splsda_res$loadings$X[, 1:2, drop = FALSE]  # pathways x components (only 2 comps here)
-needed_feats <- rownames(loadX)
-missing_feats <- setdiff(needed_feats, colnames(X_all))
-if (length(missing_feats) > 0) {
-  stop("X_all is missing ", length(missing_feats), " features used by the model. Example: ",
-       paste(head(missing_feats, 5), collapse = ", "))
-}
-X_all2 <- X_all[, needed_feats, drop = FALSE]
-
-## Replace NA/Inf with 0
-X_all2[!is.finite(X_all2)] <- NA_real_
-X_all2[is.na(X_all2)] <- 0
-
-## Scale X_all using TRAINING params
-X_all_scaled <- sweep(sweep(X_all2, 2, center_tr[needed_feats], "-"), 2, sd_tr[needed_feats], "/")
-
-## Manual projection: scores = X_scaled %*% loadings
-scores_mat <- X_all_scaled %*% loadX
-scores_mat[!is.finite(scores_mat)] <- 0
-colnames(scores_mat) <- c("comp1", "comp2")
+## NA/Inf -> 0, scaling with TRAINING mean/sd, scores = X_scaled %*% loadings
+scores_mat <- splsda_fit$project(X_all)
 
 scores_all <- as.data.frame(scores_mat)
 scores_all$dataset  <- keep_cols
@@ -438,7 +417,7 @@ top_pathways$pathway_short <- sapply(top_pathways$pathway, shorten_pathway)
 top_pathways <- top_pathways %>%
   mutate(value = ifelse(component == "comp1", comp1, comp2))
 
-write.xlsx(top_pathways, file="top_pathways_sPLSD.xlsx")
+write.xlsx(top_pathways, file=file.path(results_dir, "top_pathways_sPLSD.xlsx"))
 
 
 df_comp1 <- top_pathways %>% 
