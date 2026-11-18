@@ -4,3 +4,7 @@
 .Ruserdata
 /results
 /data
+# renv: machine-specific paths and local logs
+.Renviron
+omnipathr-log/
+Rplots.pdf
